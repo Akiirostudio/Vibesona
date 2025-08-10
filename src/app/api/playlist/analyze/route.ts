@@ -34,18 +34,31 @@ export async function POST(req: NextRequest) {
 
   try {
     const playlistResp = await spotify.getPlaylist(playlistId);
-    const tracks = playlistResp.body.tracks?.items ?? [];
 
-    const trackCount = tracks.length;
-    const popularities = tracks
-      .map((t: any) => t.track?.popularity ?? 0)
-      .filter((p: number) => typeof p === "number");
+    // Fetch ALL tracks via pagination for accuracy
+    const allItems: any[] = [];
+    let offset = 0;
+    const limit = 100;
+    let total = playlistResp.body.tracks?.total ?? 0;
+    while (true) {
+      const page = await spotify.getPlaylistTracks(playlistId, { offset, limit });
+      const items = page.body.items ?? [];
+      allItems.push(...items);
+      total = page.body.total ?? total;
+      offset += items.length;
+      if (items.length < limit) break;
+    }
+
+    const trackCount = total || allItems.length;
+    const popularities = allItems
+      .map((t: any) => t.track?.popularity)
+      .filter((p: any) => typeof p === "number") as number[];
     const averagePopularity = popularities.length
-      ? Math.round(popularities.reduce((a: number, b: number) => a + b, 0) / popularities.length)
+      ? Math.round(popularities.reduce((a, b) => a + b, 0) / popularities.length)
       : 0;
 
     const now = Date.now();
-    const addedWithin30Days = tracks.filter((t: any) => {
+    const addedWithin30Days = allItems.filter((t: any) => {
       const addedAt = t.added_at ? new Date(t.added_at).getTime() : 0;
       return now - addedAt <= 30 * 24 * 60 * 60 * 1000;
     }).length;
@@ -53,11 +66,14 @@ export async function POST(req: NextRequest) {
     // Heuristic bot score (low popularity + few recent adds)
     const botScore = Math.max(0, 100 - averagePopularity - Math.min(addedWithin30Days * 5, 50));
 
+    const followersEstimate = playlistResp.body.followers?.total ?? null;
+
     const result = {
       trackCount,
       averagePopularity,
       addedWithin30Days,
       suspectedBotsScore: botScore,
+      followersEstimate,
     };
 
     // persist minimal report without linking to a stored Playlist row
@@ -73,6 +89,7 @@ export async function POST(req: NextRequest) {
         averagePopularity,
         addedWithin30Days,
         suspectedBotsScore: botScore,
+        followersEstimate: followersEstimate ?? undefined,
       },
     });
 
