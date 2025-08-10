@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AuroraBackground } from "@/components/Aurora";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,10 +25,21 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <AuroraBackground />
+        <nav className="sticky top-0 z-40 border-b border-white/10 bg-black/20 backdrop-blur-xl">
+          <div className="max-w-6xl mx-auto p-4 flex items-center gap-6">
+            <a href="/" className="font-semibold text-white tracking-wide">Vibesona</a>
+            <div className="text-sm text-white/80 flex gap-4">
+              <a href="/playlist" className="hover:text-white">Analyzer</a>
+              <a href="/playlists" className="hover:text-white">Playlists</a>
+              <a href="/studio" className="hover:text-white">Studio</a>
+              <a href="/submissions" className="hover:text-white">Submissions</a>
+              <a href="/tokens" className="hover:text-white">Tokens</a>
+            </div>
+          </div>
+        </nav>
+        <main className="min-h-[calc(100dvh-56px)]">{children}</main>
       </body>
     </html>
   );
