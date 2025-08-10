@@ -5,9 +5,12 @@ export default function Home() {
   return (
     <div className="relative max-w-6xl mx-auto px-6 py-16">
       <section className="text-center space-y-6">
-        <h1 className="text-5xl md:text-6xl font-semibold tracking-tight text-white">
-          The Futuristic Hub for Music Intelligence & Creation
-        </h1>
+        <div className="flex flex-col items-center gap-4">
+          <img src="/brand/vibesona-logo.png" alt="Vibesona" className="w-16 h-16 object-contain" />
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-white">
+            Intelligent creation. Verified growth.
+          </h1>
+        </div>
         <p className="text-white/80 max-w-2xl mx-auto">
           Analyze playlists for authenticity, craft tracks in a sleek studio, and submit to curated lists — all in one seamless, next-gen experience.
         </p>

@@ -29,7 +29,10 @@ export default function RootLayout({
         <AuroraBackground />
         <nav className="sticky top-0 z-40 border-b border-white/10 bg-black/20 backdrop-blur-xl">
           <div className="max-w-6xl mx-auto p-4 flex items-center gap-6">
-            <a href="/" className="font-semibold text-white tracking-wide">Vibesona</a>
+            <a href="/" className="flex items-center gap-2 font-semibold text-white tracking-wide">
+              <img src="/brand/vibesona-logo.png" alt="Vibesona" className="w-6 h-6 object-contain" />
+              <span>Vibesona</span>
+            </a>
             <div className="text-sm text-white/80 flex gap-4">
               <a href="/playlist" className="hover:text-white">Analyzer</a>
               <a href="/playlists" className="hover:text-white">Playlists</a>
