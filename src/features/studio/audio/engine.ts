@@ -7,6 +7,9 @@ export class StudioEngine {
   private destination: AudioNode | null = null;
   private playing = false;
   private active: ActiveSource[] = [];
+  private playStartTime = 0;
+  private playStartCursor = 0;
+  private cursorTimer: number | null = null;
 
   async ensure() {
     if (!this.ctx) {
@@ -21,6 +24,17 @@ export class StudioEngine {
       try { source.stop(); } catch {}
     });
     this.active = [];
+    if (this.cursorTimer) {
+      clearInterval(this.cursorTimer);
+      this.cursorTimer = null;
+    }
+  }
+
+  private updateCursorPosition() {
+    if (!this.playing || !this.ctx) return;
+    const elapsed = this.ctx.currentTime - this.playStartTime;
+    const newCursor = this.playStartCursor + elapsed;
+    useStudioStore.getState().setCursor(newCursor);
   }
 
   async playFromCursor() {
@@ -28,8 +42,16 @@ export class StudioEngine {
     try { await ctx.resume(); } catch {}
     const state = useStudioStore.getState();
     const startTimeSec = state.cursorSec;
+    
     this.stopAll();
     this.playing = true;
+    this.playStartTime = ctx.currentTime;
+    this.playStartCursor = startTimeSec;
+
+    // Start cursor update timer
+    this.cursorTimer = window.setInterval(() => {
+      this.updateCursorPosition();
+    }, 16); // ~60fps
 
     const now = ctx.currentTime;
     const scheduleAt = (whenSec: number) => Math.max(now + whenSec, now + 0.01);
@@ -40,9 +62,13 @@ export class StudioEngine {
         const clip = state.clips[clipId];
         const media = state.media[clip.mediaId];
         if (!media?.buffer) return;
+        
         const clipAbsStart = clip.startTimeSec;
         const clipAbsEnd = clip.startTimeSec + clip.durationSec;
+        
+        // Only play clips that are after or at the cursor position
         if (clipAbsEnd <= startTimeSec) return;
+        
         const startDelta = clipAbsStart - startTimeSec; // can be negative
         const when = scheduleAt(startDelta);
         const offsetInClip = Math.max(0, startTimeSec - clipAbsStart);
@@ -53,6 +79,7 @@ export class StudioEngine {
         source.buffer = media.buffer;
         source.playbackRate.value = Math.max(0.01, clip.timeStretchRatio);
         const gain = ctx.createGain();
+        
         // apply simple fades
         const g = gain.gain;
         const lin = Math.pow(10, (clip.gainDb || 0) / 20);
@@ -84,7 +111,9 @@ export class StudioEngine {
     this.playing = false;
   }
 
-  async pause() { await this.stop(); }
+  async pause() { 
+    await this.stop(); 
+  }
 
   isPlaying() { return this.playing; }
   getContext() { return this.ctx; }
