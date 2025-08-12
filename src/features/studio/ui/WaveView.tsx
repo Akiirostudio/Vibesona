@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioStore } from "../state/store";
+import { studioEngine } from "../audio/engine";
 
 export function WaveView() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const zoom = useStudioStore((s) => s.zoom);
   const clips = useStudioStore((s) => s.clips);
   const tracks = useStudioStore((s) => s.tracks);
@@ -16,6 +18,29 @@ export function WaveView() {
   const cursorSec = useStudioStore((s) => s.cursorSec);
   const select = useStudioStore((s) => s.selectClips);
   const [drag, setDrag] = useState<{ id: string; startX: number; origStart: number } | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
+
+  // Auto-scroll to keep cursor visible during playback
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    const container = containerRef.current;
+    const containerWidth = container.clientWidth;
+    const pxPerSec = 100 * zoom;
+    const cursorX = cursorSec * pxPerSec;
+    const cursorScreenX = cursorX - scrollOffset;
+    
+    // If cursor is going off-screen to the right, scroll to keep it visible
+    if (cursorScreenX > containerWidth * 0.8) {
+      const newScrollOffset = cursorX - containerWidth * 0.5;
+      setScrollOffset(Math.max(0, newScrollOffset));
+    }
+    // If cursor is going off-screen to the left, scroll to keep it visible
+    else if (cursorScreenX < containerWidth * 0.2) {
+      const newScrollOffset = cursorX - containerWidth * 0.5;
+      setScrollOffset(Math.max(0, newScrollOffset));
+    }
+  }, [cursorSec, zoom, scrollOffset]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -43,7 +68,7 @@ export function WaveView() {
       track.clipIds.forEach((clipId) => {
         const clip = clips[clipId];
         const m = media[clip.mediaId];
-        let x = Math.round(clip.startTimeSec * pxPerSec);
+        let x = Math.round((clip.startTimeSec * pxPerSec) - (scrollOffset * dpr));
         let w = Math.max(1, Math.round(clip.durationSec * pxPerSec));
         const y = y0 + pad;
         const h = rowHeight - pad * 2;
@@ -84,10 +109,10 @@ export function WaveView() {
     });
 
     // draw time-cursor ON TOP
-    const cursorX = Math.round(cursorSec * pxPerSec);
+    const cursorX = Math.round((cursorSec * pxPerSec) - (scrollOffset * dpr));
     ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.fillRect(cursorX, 0, Math.max(1, dpr), height);
-  }, [zoom, renderData, cursorSec]);
+  }, [zoom, renderData, cursorSec, scrollOffset]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!
@@ -102,11 +127,16 @@ export function WaveView() {
     const row = Math.floor(y / rowHeight);
     const trackId = renderData.trackOrder[row];
     const track = renderData.tracks[trackId];
-    if (!track) { setCursor(x / pxPerSec); return; }
+    if (!track) { 
+      // Convert screen position to timeline position
+      const timelineX = (x / dpr) + scrollOffset;
+      setCursor(timelineX / (100 * zoom)); 
+      return; 
+    }
     let hit: string | null = null;
     track.clipIds.forEach((cid) => {
       const c = renderData.clips[cid];
-      const cx = Math.round(c.startTimeSec * pxPerSec);
+      const cx = Math.round((c.startTimeSec * pxPerSec) - (scrollOffset * dpr));
       const cw = Math.max(1, Math.round(c.durationSec * pxPerSec));
       const cy = row * rowHeight + 4 * dpr;
       const ch = rowHeight - 8 * dpr;
@@ -118,7 +148,9 @@ export function WaveView() {
       setDrag({ id: hit, startX: x, origStart });
     } else {
       select([]);
-      setCursor(x / pxPerSec);
+      // Convert screen position to timeline position
+      const timelineX = (x / dpr) + scrollOffset;
+      setCursor(timelineX / (100 * zoom));
     }
   };
 
@@ -140,15 +172,17 @@ export function WaveView() {
   const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => e.preventDefault();
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="w-full h-full block"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={onPointerUp}
-      onDragOver={onDragOver}
-    />
+    <div ref={containerRef} className="w-full h-full overflow-hidden">
+      <canvas
+        ref={canvasRef}
+        className="w-full h-full block"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+        onDragOver={onDragOver}
+      />
+    </div>
   );
 }
 
