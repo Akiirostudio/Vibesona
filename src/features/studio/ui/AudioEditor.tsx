@@ -116,7 +116,9 @@ export function AudioEditor() {
       const track = tracks.find(t => t.id === clip.trackId);
       if (!track || track.muted) return;
       
-      const audioBuffer = audioBuffersRef.current.get(track.id);
+      // Use clip's originalTrackId if available, otherwise use track.id
+      const bufferId = clip.originalTrackId || track.id;
+      const audioBuffer = audioBuffersRef.current.get(bufferId);
       if (!audioBuffer) return;
       
       const source = audioContextRef.current!.createBufferSource();
@@ -130,7 +132,7 @@ export function AudioEditor() {
       gainNode.gain.value = track.volume * clip.volume;
       
       // Get buffer info to understand the relationship to original audio
-      const bufferInfo = audioBufferMap.get(track.id);
+      const bufferInfo = audioBufferMap.get(bufferId);
       
       if (bufferInfo) {
         // Calculate buffer start time relative to this clip's buffer
@@ -685,25 +687,25 @@ export function AudioEditor() {
           }
         }
         
-        // Create new track IDs for the split parts
-        const firstTrackId = `split_${Date.now()}_1`;
-        const secondTrackId = `split_${Date.now()}_2`;
+        // Create new buffer IDs for the split parts (but keep same track)
+        const firstBufferId = `split_${Date.now()}_1`;
+        const secondBufferId = `split_${Date.now()}_2`;
         
         // Store the new buffers
-        audioBuffersRef.current.set(firstTrackId, firstPartBuffer);
-        audioBuffersRef.current.set(secondTrackId, secondPartBuffer);
+        audioBuffersRef.current.set(firstBufferId, firstPartBuffer);
+        audioBuffersRef.current.set(secondBufferId, secondPartBuffer);
         
         // Update audio buffer map to track relationships
         setAudioBufferMap(prev => {
           const newMap = new Map(prev);
-          newMap.set(firstTrackId, {
+          newMap.set(firstBufferId, {
             buffer: firstPartBuffer,
             originalTrackId: originalBufferInfo.originalTrackId,
             startSample: originalBufferInfo.startSample,
             endSample: originalStartSample,
             originalDuration: originalBufferInfo.originalDuration
           });
-          newMap.set(secondTrackId, {
+          newMap.set(secondBufferId, {
             buffer: secondPartBuffer,
             originalTrackId: originalBufferInfo.originalTrackId,
             startSample: originalStartSample,
@@ -713,47 +715,32 @@ export function AudioEditor() {
           return newMap;
         });
         
-        // Create new tracks for the split parts
-        const newTracks: AudioTrack[] = [
-          {
-            ...track!,
-            id: firstTrackId,
-            name: `${track!.name} (Part 1)`,
-            duration: splitTimeInClip
-          },
-          {
-            ...track!,
-            id: secondTrackId,
-            name: `${track!.name} (Part 2)`,
-            duration: (originalBufferInfo.endSample - originalStartSample) / sampleRate
-          }
-        ];
-        
-        // Create new clips for the split parts
+        // Create new clips for the split parts (same track, different positions)
         const clip1: AudioClip = {
           id: Date.now().toString(),
-          trackId: firstTrackId,
+          trackId: clipAtPlayhead.trackId, // Keep same track ID
           startTime: clipAtPlayhead.startTime,
           endTime: splitTime,
           name: `${clipAtPlayhead.name} (Part 1)`,
           volume: clipAtPlayhead.volume,
           fadeIn: clipAtPlayhead.fadeIn,
-          fadeOut: 0
+          fadeOut: 0,
+          originalTrackId: firstBufferId // Reference to the split buffer
         };
         
         const clip2: AudioClip = {
           id: (Date.now() + 1).toString(),
-          trackId: secondTrackId,
+          trackId: clipAtPlayhead.trackId, // Keep same track ID
           startTime: splitTime,
           endTime: clipAtPlayhead.endTime,
           name: `${clipAtPlayhead.name} (Part 2)`,
           volume: clipAtPlayhead.volume,
           fadeIn: 0,
-          fadeOut: clipAtPlayhead.fadeOut
+          fadeOut: clipAtPlayhead.fadeOut,
+          originalTrackId: secondBufferId // Reference to the split buffer
         };
         
-        // Update tracks and clips
-        setTracks(prev => prev.filter(t => t.id !== track!.id).concat(newTracks));
+        // Update clips (keep same track)
         setClips(prev => prev.filter(c => c.id !== clipAtPlayhead.id).concat([clip1, clip2]));
         setSelectedClip(clip1.id);
         
