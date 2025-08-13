@@ -60,6 +60,7 @@ export function AudioEditor() {
   const [startTime, setStartTime] = useState(0);
   const [lastClickTime, setLastClickTime] = useState(0); // For double-click detection
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null); // For dropdown menus
+  const [audioBufferMap, setAudioBufferMap] = useState<Map<string, { buffer: AudioBuffer; originalTrackId: string; startSample: number; endSample: number }>>(new Map()); // Track audio buffer relationships
 
   const trackColors = [
     'rgba(99, 102, 241, 0.8)',   // Indigo
@@ -116,16 +117,38 @@ export function AudioEditor() {
         // Set volume
         gainNode.gain.value = track.volume * clip.volume;
         
-        // Calculate buffer start time (where in the original audio to start)
-        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
-        const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
-        const duration = bufferEndTime - bufferStartTime;
+        // Get buffer info to understand the relationship to original audio
+        const bufferInfo = audioBufferMap.get(track.id);
         
-        // Only play if we have valid duration
-        if (duration > 0) {
-          source.start(0, bufferStartTime, duration);
-          audioSourcesRef.current.set(clip.id, source);
-          gainNodesRef.current.set(clip.id, gainNode);
+        if (bufferInfo) {
+          // Calculate the actual time position in the original audio
+          const originalStartTime = bufferInfo.startSample / bufferInfo.buffer.sampleRate;
+          const clipStartInOriginal = originalStartTime + clip.startTime;
+          const currentTimeInOriginal = clipStartInOriginal + (currentTime - clip.startTime);
+          
+          // Calculate buffer start time relative to this clip's buffer
+          const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+          const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
+          const duration = bufferEndTime - bufferStartTime;
+          
+          // Only play if we have valid duration
+          if (duration > 0) {
+            source.start(0, bufferStartTime, duration);
+            audioSourcesRef.current.set(clip.id, source);
+            gainNodesRef.current.set(clip.id, gainNode);
+          }
+        } else {
+          // Fallback for clips without buffer info (original clips)
+          const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+          const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
+          const duration = bufferEndTime - bufferStartTime;
+          
+          // Only play if we have valid duration
+          if (duration > 0) {
+            source.start(0, bufferStartTime, duration);
+            audioSourcesRef.current.set(clip.id, source);
+            gainNodesRef.current.set(clip.id, gainNode);
+          }
         }
       }
     });
@@ -245,6 +268,18 @@ export function AudioEditor() {
       const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
       const trackId = Date.now().toString();
       audioBuffersRef.current.set(trackId, audioBuffer);
+      
+      // Track the original audio buffer relationship
+      setAudioBufferMap(prev => {
+        const newMap = new Map(prev);
+        newMap.set(trackId, {
+          buffer: audioBuffer,
+          originalTrackId: trackId,
+          startSample: 0,
+          endSample: audioBuffer.length
+        });
+        return newMap;
+      });
       
       // Ensure audio context is running
       if (audioContextRef.current.state === 'suspended') {
@@ -598,44 +633,48 @@ export function AudioEditor() {
         audioSourcesRef.current.delete(clipAtPlayhead.id);
       }
 
-      // Get the original audio buffer
+      // Get the original audio buffer info
       const track = tracks.find(t => t.id === clipAtPlayhead.trackId);
-      const originalBuffer = audioBuffersRef.current.get(track!.id);
+      const originalBufferInfo = audioBufferMap.get(track!.id);
       
-      if (originalBuffer && audioContextRef.current) {
-        // Calculate split position in samples
+      if (originalBufferInfo && audioContextRef.current) {
+        // Calculate split position in samples relative to the original buffer
         const splitTimeInClip = splitTime - clipAtPlayhead.startTime;
-        const sampleRate = originalBuffer.sampleRate;
+        const sampleRate = originalBufferInfo.buffer.sampleRate;
         const splitSample = Math.floor(splitTimeInClip * sampleRate);
         
-        // Create first part buffer
+        // Calculate the actual sample positions in the original buffer
+        const originalStartSample = originalBufferInfo.startSample + splitSample;
+        const originalEndSample = originalBufferInfo.endSample;
+        
+        // Create first part buffer (from start to split point)
         const firstPartBuffer = audioContextRef.current.createBuffer(
-          originalBuffer.numberOfChannels,
+          originalBufferInfo.buffer.numberOfChannels,
           splitSample,
           sampleRate
         );
         
-        // Create second part buffer
+        // Create second part buffer (from split point to end)
         const secondPartBuffer = audioContextRef.current.createBuffer(
-          originalBuffer.numberOfChannels,
-          originalBuffer.length - splitSample,
+          originalBufferInfo.buffer.numberOfChannels,
+          originalBufferInfo.buffer.length - originalStartSample,
           sampleRate
         );
         
-        // Copy audio data to new buffers
-        for (let channel = 0; channel < originalBuffer.numberOfChannels; channel++) {
-          const originalData = originalBuffer.getChannelData(channel);
+        // Copy audio data to new buffers from the original buffer
+        for (let channel = 0; channel < originalBufferInfo.buffer.numberOfChannels; channel++) {
+          const originalData = originalBufferInfo.buffer.getChannelData(channel);
           const firstPartData = firstPartBuffer.getChannelData(channel);
           const secondPartData = secondPartBuffer.getChannelData(channel);
           
-          // Copy first part
+          // Copy first part (from original start to split point)
           for (let i = 0; i < splitSample; i++) {
-            firstPartData[i] = originalData[i];
+            firstPartData[i] = originalData[originalBufferInfo.startSample + i];
           }
           
-          // Copy second part
-          for (let i = 0; i < originalBuffer.length - splitSample; i++) {
-            secondPartData[i] = originalData[splitSample + i];
+          // Copy second part (from split point to original end)
+          for (let i = 0; i < originalBufferInfo.buffer.length - originalStartSample; i++) {
+            secondPartData[i] = originalData[originalStartSample + i];
           }
         }
         
@@ -646,6 +685,24 @@ export function AudioEditor() {
         // Store the new buffers
         audioBuffersRef.current.set(firstTrackId, firstPartBuffer);
         audioBuffersRef.current.set(secondTrackId, secondPartBuffer);
+        
+        // Update audio buffer map to track relationships
+        setAudioBufferMap(prev => {
+          const newMap = new Map(prev);
+          newMap.set(firstTrackId, {
+            buffer: firstPartBuffer,
+            originalTrackId: originalBufferInfo.originalTrackId,
+            startSample: originalBufferInfo.startSample,
+            endSample: originalStartSample
+          });
+          newMap.set(secondTrackId, {
+            buffer: secondPartBuffer,
+            originalTrackId: originalBufferInfo.originalTrackId,
+            startSample: originalStartSample,
+            endSample: originalBufferInfo.endSample
+          });
+          return newMap;
+        });
         
         // Create new tracks for the split parts
         const newTracks: AudioTrack[] = [
@@ -659,7 +716,7 @@ export function AudioEditor() {
             ...track!,
             id: secondTrackId,
             name: `${track!.name} (Part 2)`,
-            duration: originalBuffer.duration - splitTimeInClip
+            duration: (originalBufferInfo.endSample - originalStartSample) / sampleRate
           }
         ];
         
