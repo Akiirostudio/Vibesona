@@ -14,6 +14,7 @@ interface AudioTrack {
   color: string;
   volume: number;
   muted: boolean;
+  soloed: boolean;
   leftChannel: boolean;
   rightChannel: boolean;
 }
@@ -27,11 +28,17 @@ interface AudioClip {
   volume: number;
   fadeIn: number;
   fadeOut: number;
+  originalTrackId?: string; // For tracking where clip came from
 }
 
 export function AudioEditor() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
+  const audioSourcesRef = useRef<Map<string, AudioBufferSourceNode>>(new Map());
+  const gainNodesRef = useRef<Map<string, GainNode>>(new Map());
+  
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -46,6 +53,13 @@ export function AudioEditor() {
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragClip, setDragClip] = useState<{ clip: AudioClip; offsetX: number; offsetY: number } | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [resizeClip, setResizeClip] = useState<{ clip: AudioClip; edge: 'start' | 'end'; startX: number } | null>(null);
+  const [isDraggingClip, setIsDraggingClip] = useState(false);
+  const [startTime, setStartTime] = useState(0);
+  const [lastClickTime, setLastClickTime] = useState(0); // For double-click detection
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null); // For dropdown menus
 
   const trackColors = [
     'rgba(99, 102, 241, 0.8)',   // Indigo
@@ -60,24 +74,121 @@ export function AudioEditor() {
 
   const totalDuration = Math.max(...tracks.map(track => track.duration), 0);
 
+  // Initialize audio context
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const updateTime = () => setCurrentTime(audio.currentTime);
-    const updateDuration = () => setDuration(audio.duration);
-    const handleEnded = () => setIsPlaying(false);
-
-    audio.addEventListener('timeupdate', updateTime);
-    audio.addEventListener('loadedmetadata', updateDuration);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('timeupdate', updateTime);
-      audio.removeEventListener('loadedmetadata', updateDuration);
-      audio.removeEventListener('ended', handleEnded);
-    };
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
   }, []);
+
+  // Audio playback management
+  const playAudio = () => {
+    if (!audioContextRef.current || !isPlaying) return;
+    
+    // Stop all current sources
+    audioSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch (e) {
+        // Source might already be stopped
+      }
+    });
+    audioSourcesRef.current.clear();
+    gainNodesRef.current.clear();
+    
+    // Create new sources for each clip
+    clips.forEach(clip => {
+      const track = tracks.find(t => t.id === clip.trackId);
+      if (!track || track.muted) return;
+      
+      const audioBuffer = audioBuffersRef.current.get(track.id);
+      if (!audioBuffer) return;
+      
+      // Only play if clip is in current time range
+      if (currentTime < clip.endTime && currentTime + 10 > clip.startTime) {
+        const source = audioContextRef.current!.createBufferSource();
+        const gainNode = audioContextRef.current!.createGain();
+        
+        source.buffer = audioBuffer;
+        source.connect(gainNode);
+        gainNode.connect(audioContextRef.current!.destination);
+        
+        // Set volume
+        gainNode.gain.value = track.volume * clip.volume;
+        
+        // Calculate buffer start time (where in the original audio to start)
+        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+        const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
+        const duration = bufferEndTime - bufferStartTime;
+        
+        // Only play if we have valid duration
+        if (duration > 0) {
+          source.start(0, bufferStartTime, duration);
+          audioSourcesRef.current.set(clip.id, source);
+          gainNodesRef.current.set(clip.id, gainNode);
+        }
+      }
+    });
+  };
+
+  // Update audio when clips change
+  useEffect(() => {
+    if (isPlaying && audioContextRef.current) {
+      // Debounce audio updates to prevent excessive restarts
+      const timeoutId = setTimeout(() => {
+        playAudio();
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [clips, tracks, isPlaying]);
+  
+  // Separate effect for current time updates to avoid audio restarts
+  useEffect(() => {
+    if (isPlaying && audioContextRef.current) {
+      // Only restart audio if we've moved significantly
+      const timeoutId = setTimeout(() => {
+        playAudio();
+      }, 200);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [currentTime]);
+
+  // Timer for updating current time
+  useEffect(() => {
+    if (!isPlaying) return;
+    
+    let startTime = Date.now() - (currentTime * 1000);
+    
+    const interval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      const newTime = Math.min(elapsed, totalDuration);
+      
+      if (newTime >= totalDuration) {
+        setIsPlaying(false);
+        setCurrentTime(0);
+        return;
+      }
+      
+      setCurrentTime(newTime);
+    }, 50); // More frequent updates for smoother playback
+    
+    return () => clearInterval(interval);
+  }, [isPlaying, totalDuration, currentTime]);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (activeDropdown && !target.closest('.dropdown-menu') && !target.closest('.dropdown-trigger')) {
+        setActiveDropdown(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [activeDropdown]);
 
   const generateWaveform = async (file: File): Promise<number[]> => {
     try {
@@ -126,70 +237,101 @@ export function AudioEditor() {
       const url = URL.createObjectURL(file);
       const waveformData = await generateWaveform(file);
       
+      // Load audio buffer with proper error handling
+      const arrayBuffer = await file.arrayBuffer();
+      if (!audioContextRef.current) {
+        throw new Error('Audio context not initialized');
+      }
+      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+      const trackId = Date.now().toString();
+      audioBuffersRef.current.set(trackId, audioBuffer);
+      
+      // Ensure audio context is running
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      
       const newTrack: AudioTrack = {
-        id: Date.now().toString(),
+        id: trackId,
         name: file.name.replace(/\.[^/.]+$/, ""),
         file,
         url,
-        duration: 0,
+        duration: audioBuffer.duration,
         waveformData,
         color: trackColors[tracks.length % trackColors.length],
         volume: 1,
         muted: false,
+        soloed: false,
         leftChannel: true,
         rightChannel: true
       };
 
-      const audio = new Audio(url);
-      audio.addEventListener('loadedmetadata', () => {
-        newTrack.duration = audio.duration;
-        setTracks(prev => [...prev, newTrack]);
-        
-        const newClip: AudioClip = {
-          id: Date.now().toString(),
-          trackId: newTrack.id,
-          startTime: 0,
-          endTime: audio.duration,
-          name: newTrack.name,
-          volume: 1,
-          fadeIn: 0,
-          fadeOut: 0
-        };
-        setClips(prev => [...prev, newClip]);
-        
-        if (tracks.length === 0 && audioRef.current) {
-          audioRef.current.src = url;
-          audioRef.current.load();
-        }
-        
-        setIsLoading(false);
-      });
+      setTracks(prev => [...prev, newTrack]);
+      
+      const newClip: AudioClip = {
+        id: Date.now().toString(),
+        trackId: newTrack.id,
+        startTime: 0,
+        endTime: audioBuffer.duration,
+        name: newTrack.name,
+        volume: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        originalTrackId: newTrack.id
+      };
+      setClips(prev => [...prev, newClip]);
+      
+      // Update total duration
+      setDuration(Math.max(duration, audioBuffer.duration));
+      
+      setIsLoading(false);
     } catch (error) {
       setError('Error loading audio file');
       setIsLoading(false);
     }
   };
 
-  const handlePlay = () => {
-    if (audioRef.current && tracks.length > 0) {
-      audioRef.current.play();
-      setIsPlaying(true);
+  const handlePlay = async () => {
+    if (tracks.length > 0 && audioContextRef.current) {
+      try {
+        if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+        setIsPlaying(true);
+        // Small delay to ensure audio context is ready
+        setTimeout(() => playAudio(), 50);
+      } catch (error) {
+        console.error('Error starting playback:', error);
+        setError('Error starting playback');
+      }
     }
   };
 
   const handlePause = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    }
+    setIsPlaying(false);
+    // Stop all audio sources
+    audioSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch (e) {
+        // Source might already be stopped
+      }
+    });
+    audioSourcesRef.current.clear();
   };
 
   const handleStop = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      setIsPlaying(false);
-    }
+    setIsPlaying(false);
+    setCurrentTime(0);
+    // Stop all audio sources
+    audioSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch (e) {
+        // Source might already be stopped
+      }
+    });
+    audioSourcesRef.current.clear();
   };
 
   const handleRecord = () => {
@@ -203,15 +345,11 @@ export function AudioEditor() {
   };
 
   const handleSkipBackward = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
-    }
+    setCurrentTime(prev => Math.max(0, prev - 5));
   };
 
   const handleSkipForward = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = Math.min(audioRef.current.duration, audioRef.current.currentTime + 5);
-    }
+    setCurrentTime(prev => Math.min(totalDuration, prev + 5));
   };
 
   const handleNewFile = () => {
@@ -247,15 +385,47 @@ export function AudioEditor() {
     const percent = x / rect.width;
     const newTime = percent * totalDuration;
     
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
-    }
+    const currentTime = Date.now();
+    const timeDiff = currentTime - lastClickTime;
+    const isDoubleClick = timeDiff < 300; // 300ms threshold for double-click
     
-    if (selectionStart === null) {
-      setSelectionStart(newTime);
-      setSelectionEnd(newTime);
+    setLastClickTime(currentTime);
+    
+    if (isDoubleClick) {
+      // Double click - select clip/track
+      const trackIndex = Math.floor(y / 120);
+      if (trackIndex >= 0 && trackIndex < tracks.length) {
+        const track = tracks[trackIndex];
+        const trackY = trackIndex * 120;
+        const clipY = trackY + 40;
+        
+        if (y >= clipY && y <= clipY + 60) {
+          const clickedClip = clips.find(clip => {
+            if (clip.trackId !== track.id) return false;
+            const clipX = (clip.startTime / totalDuration) * canvas.width * zoom;
+            const clipWidth = ((clip.endTime - clip.startTime) / totalDuration) * canvas.width * zoom;
+            return x >= clipX && x <= clipX + clipWidth;
+          });
+          
+          if (clickedClip) {
+            setSelectedClip(clickedClip.id);
+          } else {
+            // Double-clicked on empty track area - select track
+            setSelectedClip(null);
+          }
+        }
+      }
     } else {
-      setSelectionEnd(newTime);
+      // Single click - only move playhead (already done in mouseDown)
+      // Only create selection if in selection mode
+      if (selectionMode) {
+        if (selectionStart === null) {
+          setSelectionStart(newTime);
+          setSelectionEnd(newTime);
+        } else {
+          setSelectionEnd(newTime);
+        }
+      }
     }
   };
 
@@ -268,72 +438,323 @@ export function AudioEditor() {
     const percent = x / rect.width;
     const newTime = percent * totalDuration;
     
-    setSelectionEnd(newTime);
+    // Only update selection if in selection mode
+    if (selectionMode) {
+      setSelectionEnd(newTime);
+    }
   };
 
   const handleCanvasMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!totalDuration) return;
+    
+    const canvas = event.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    // Always update playhead position on mouse down
+    const percent = x / rect.width;
+    const newTime = percent * totalDuration;
+    setCurrentTime(newTime);
+    
+    // Check if clicking on a clip to start dragging (only if already selected)
+    const trackIndex = Math.floor(y / 120);
+    if (trackIndex >= 0 && trackIndex < tracks.length) {
+      const track = tracks[trackIndex];
+      const trackY = trackIndex * 120;
+      const clipY = trackY + 40;
+      
+      if (y >= clipY && y <= clipY + 60) {
+        const clickedClip = clips.find(clip => {
+          if (clip.trackId !== track.id) return false;
+          const clipX = (clip.startTime / totalDuration) * canvas.width * zoom;
+          const clipWidth = ((clip.endTime - clip.startTime) / totalDuration) * canvas.width * zoom;
+          
+          // Check for resize handles (left and right edges)
+          const handleWidth = 8;
+          if (x >= clipX && x <= clipX + handleWidth) {
+            // Left resize handle
+            setResizeClip({ clip, edge: 'start', startX: x });
+            return true;
+          }
+          if (x >= clipX + clipWidth - handleWidth && x <= clipX + clipWidth) {
+            // Right resize handle
+            setResizeClip({ clip, edge: 'end', startX: x });
+            return true;
+          }
+          
+          return x >= clipX && x <= clipX + clipWidth;
+        });
+        
+        // Only start dragging if clip is already selected
+        if (clickedClip && selectedClip === clickedClip.id) {
+          // Start dragging if not resizing
+          if (!resizeClip) {
+            setDragClip({ clip: clickedClip, offsetX: x, offsetY: y });
+            setIsDraggingClip(true);
+          }
+        }
+      }
+    }
+    
     setIsDragging(true);
-    handleCanvasClick(event);
   };
 
   const handleCanvasMouseUp = () => {
     setIsDragging(false);
+    setDragClip(null);
+    setResizeClip(null);
+    setIsDraggingClip(false);
   };
 
   const handleCanvasMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isDragging) {
-      handleCanvasDrag(event);
+    if (!totalDuration) return;
+    
+    const canvas = event.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const percent = x / rect.width;
+    const newTime = percent * totalDuration;
+    
+    // Handle selection dragging
+    if (isDragging && selectionMode) {
+      setSelectionEnd(newTime);
+    }
+    
+    // Handle clip dragging
+    if (isDraggingClip && dragClip) {
+      const newPercent = x / rect.width;
+      const newStartTime = newPercent * totalDuration;
+      const clipDuration = dragClip.clip.endTime - dragClip.clip.startTime;
+      
+      // Check if moving to a different track
+      const newTrackIndex = Math.floor(y / 120);
+      const newTrack = tracks[newTrackIndex];
+      
+      setClips(prev => prev.map(c => 
+        c.id === dragClip.clip.id 
+          ? { 
+              ...c, 
+              startTime: Math.max(0, newStartTime),
+              endTime: Math.max(0, newStartTime) + clipDuration,
+              trackId: newTrack ? newTrack.id : c.trackId
+            }
+          : c
+      ));
+    }
+    
+    // Handle clip resizing
+    if (resizeClip) {
+      const newPercent = x / rect.width;
+      const newTime = newPercent * totalDuration;
+      
+      setClips(prev => prev.map(c => {
+        if (c.id !== resizeClip.clip.id) return c;
+        
+        if (resizeClip.edge === 'start') {
+          const newStartTime = Math.min(newTime, c.endTime - 0.1);
+          return { ...c, startTime: Math.max(0, newStartTime) };
+        } else {
+          const newEndTime = Math.max(newTime, c.startTime + 0.1);
+          return { ...c, endTime: Math.min(totalDuration, newEndTime) };
+        }
+      }));
     }
   };
 
   const clearSelection = () => {
     setSelectionStart(null);
     setSelectionEnd(null);
+    setSelectionMode(false);
   };
 
   const handleSplit = () => {
-    if (!selectedClip || tracks.length === 0) {
-      setError('Please select a clip first');
+    if (tracks.length === 0) {
+      setError('Please add audio tracks first');
+      return;
+    }
+
+    // Find the clip at the current playhead position
+    const clipAtPlayhead = clips.find(clip => 
+      currentTime >= clip.startTime && currentTime <= clip.endTime
+    );
+
+    if (!clipAtPlayhead) {
+      setError('No clip found at current playhead position');
+      return;
+    }
+
+    const splitTime = currentTime;
+    if (splitTime > clipAtPlayhead.startTime && splitTime < clipAtPlayhead.endTime) {
+      // Stop current audio for this clip
+      const currentSource = audioSourcesRef.current.get(clipAtPlayhead.id);
+      if (currentSource) {
+        try {
+          currentSource.stop();
+        } catch (e) {
+          // Source might already be stopped
+        }
+        audioSourcesRef.current.delete(clipAtPlayhead.id);
+      }
+
+      // Get the original audio buffer
+      const track = tracks.find(t => t.id === clipAtPlayhead.trackId);
+      const originalBuffer = audioBuffersRef.current.get(track!.id);
+      
+      if (originalBuffer && audioContextRef.current) {
+        // Calculate split position in samples
+        const splitTimeInClip = splitTime - clipAtPlayhead.startTime;
+        const sampleRate = originalBuffer.sampleRate;
+        const splitSample = Math.floor(splitTimeInClip * sampleRate);
+        
+        // Create first part buffer
+        const firstPartBuffer = audioContextRef.current.createBuffer(
+          originalBuffer.numberOfChannels,
+          splitSample,
+          sampleRate
+        );
+        
+        // Create second part buffer
+        const secondPartBuffer = audioContextRef.current.createBuffer(
+          originalBuffer.numberOfChannels,
+          originalBuffer.length - splitSample,
+          sampleRate
+        );
+        
+        // Copy audio data to new buffers
+        for (let channel = 0; channel < originalBuffer.numberOfChannels; channel++) {
+          const originalData = originalBuffer.getChannelData(channel);
+          const firstPartData = firstPartBuffer.getChannelData(channel);
+          const secondPartData = secondPartBuffer.getChannelData(channel);
+          
+          // Copy first part
+          for (let i = 0; i < splitSample; i++) {
+            firstPartData[i] = originalData[i];
+          }
+          
+          // Copy second part
+          for (let i = 0; i < originalBuffer.length - splitSample; i++) {
+            secondPartData[i] = originalData[splitSample + i];
+          }
+        }
+        
+        // Create new track IDs for the split parts
+        const firstTrackId = `split_${Date.now()}_1`;
+        const secondTrackId = `split_${Date.now()}_2`;
+        
+        // Store the new buffers
+        audioBuffersRef.current.set(firstTrackId, firstPartBuffer);
+        audioBuffersRef.current.set(secondTrackId, secondPartBuffer);
+        
+        // Create new tracks for the split parts
+        const newTracks: AudioTrack[] = [
+          {
+            ...track!,
+            id: firstTrackId,
+            name: `${track!.name} (Part 1)`,
+            duration: splitTimeInClip
+          },
+          {
+            ...track!,
+            id: secondTrackId,
+            name: `${track!.name} (Part 2)`,
+            duration: originalBuffer.duration - splitTimeInClip
+          }
+        ];
+        
+        // Create new clips for the split parts
+        const clip1: AudioClip = {
+          id: Date.now().toString(),
+          trackId: firstTrackId,
+          startTime: clipAtPlayhead.startTime,
+          endTime: splitTime,
+          name: `${clipAtPlayhead.name} (Part 1)`,
+          volume: clipAtPlayhead.volume,
+          fadeIn: clipAtPlayhead.fadeIn,
+          fadeOut: 0
+        };
+        
+        const clip2: AudioClip = {
+          id: (Date.now() + 1).toString(),
+          trackId: secondTrackId,
+          startTime: splitTime,
+          endTime: clipAtPlayhead.endTime,
+          name: `${clipAtPlayhead.name} (Part 2)`,
+          volume: clipAtPlayhead.volume,
+          fadeIn: 0,
+          fadeOut: clipAtPlayhead.fadeOut
+        };
+        
+        // Update tracks and clips
+        setTracks(prev => prev.filter(t => t.id !== track!.id).concat(newTracks));
+        setClips(prev => prev.filter(c => c.id !== clipAtPlayhead.id).concat([clip1, clip2]));
+        setSelectedClip(clip1.id);
+        
+        // Restart audio playback
+        if (isPlaying) {
+          setTimeout(() => playAudio(), 50);
+        }
+      }
+    }
+  };
+
+  const handleCut = () => {
+    if (!selectedClip || !selectionStart || !selectionEnd) {
+      setError('Please select a clip and make a selection first');
       return;
     }
 
     const clip = clips.find(c => c.id === selectedClip);
     if (!clip) return;
 
-    const splitTime = currentTime;
-    if (splitTime > clip.startTime && splitTime < clip.endTime) {
-      const newClip: AudioClip = {
-        id: Date.now().toString(),
+    const cutStart = Math.max(clip.startTime, selectionStart);
+    const cutEnd = Math.min(clip.endTime, selectionEnd);
+
+    if (cutStart >= cutEnd) {
+      setError('Invalid selection for cutting');
+      return;
+    }
+
+    // Create the cut clip
+    const cutClip: AudioClip = {
+      id: Date.now().toString(),
+      trackId: clip.trackId,
+      startTime: cutStart,
+      endTime: cutEnd,
+      name: `${clip.name} (Cut)`,
+      volume: clip.volume,
+      fadeIn: 0,
+      fadeOut: 0,
+      originalTrackId: clip.originalTrackId
+    };
+
+    // Update original clip
+    const updatedClip = { ...clip };
+    if (cutStart === clip.startTime) {
+      updatedClip.startTime = cutEnd;
+    } else if (cutEnd === clip.endTime) {
+      updatedClip.endTime = cutStart;
+    } else {
+      // Split into two parts
+      const secondPart: AudioClip = {
+        id: (Date.now() + 1).toString(),
         trackId: clip.trackId,
-        startTime: splitTime,
+        startTime: cutEnd,
         endTime: clip.endTime,
         name: `${clip.name} (Part 2)`,
         volume: clip.volume,
         fadeIn: 0,
-        fadeOut: clip.fadeOut
+        fadeOut: clip.fadeOut,
+        originalTrackId: clip.originalTrackId
       };
-
-      setClips(prev => prev.map(c => 
-        c.id === selectedClip 
-          ? { ...c, endTime: splitTime, name: `${c.name} (Part 1)`, fadeOut: 0 }
-          : c
-      ));
-
-      setClips(prev => [...prev, newClip]);
-    }
-  };
-
-  const handleTrim = () => {
-    if (!selectedClip || tracks.length === 0) {
-      setError('Please select a clip first');
-      return;
+      setClips(prev => [...prev, secondPart]);
+      updatedClip.endTime = cutStart;
     }
 
-    setClips(prev => prev.map(c => 
-      c.id === selectedClip 
-        ? { ...c, endTime: currentTime }
-        : c
-    ));
+    setClips(prev => prev.map(c => c.id === selectedClip ? updatedClip : c));
+    setClips(prev => [...prev, cutClip]);
+    setSelectedClip(cutClip.id);
   };
 
   const handleCopy = () => {
@@ -362,7 +783,8 @@ export function AudioEditor() {
       name: `${copiedClip.name} (Copy)`,
       volume: copiedClip.volume,
       fadeIn: copiedClip.fadeIn,
-      fadeOut: copiedClip.fadeOut
+      fadeOut: copiedClip.fadeOut,
+      originalTrackId: copiedClip.originalTrackId
     };
 
     setClips(prev => [...prev, newClip]);
@@ -421,10 +843,116 @@ export function AudioEditor() {
       name: `${clip.name} (Duplicate)`,
       volume: clip.volume,
       fadeIn: clip.fadeIn,
-      fadeOut: clip.fadeOut
+      fadeOut: clip.fadeOut,
+      originalTrackId: clip.originalTrackId
     };
 
     setClips(prev => [...prev, newClip]);
+  };
+
+  const handleTrackMute = (trackId: string) => {
+    setTracks(prev => prev.map(track => 
+      track.id === trackId 
+        ? { ...track, muted: !track.muted }
+        : track
+    ));
+    
+    // Immediately update audio if playing
+    if (isPlaying) {
+      // Stop all sources for this track
+      clips.forEach(clip => {
+        if (clip.trackId === trackId) {
+          const source = audioSourcesRef.current.get(clip.id);
+          if (source) {
+            try {
+              source.stop();
+            } catch (e) {
+              // Source might already be stopped
+            }
+            audioSourcesRef.current.delete(clip.id);
+          }
+        }
+      });
+      
+      // Restart audio to apply mute
+      setTimeout(() => playAudio(), 50);
+    }
+  };
+
+  const handleTrackSolo = (trackId: string) => {
+    setTracks(prev => prev.map(track => 
+      track.id === trackId 
+        ? { ...track, soloed: !track.soloed }
+        : track
+    ));
+  };
+
+  const handleTrackDuplicate = (trackId: string) => {
+    const track = tracks.find(t => t.id === trackId);
+    if (!track) return;
+
+    const newTrack: AudioTrack = {
+      id: Date.now().toString(),
+      name: `${track.name} (Copy)`,
+      file: track.file,
+      url: track.url,
+      duration: track.duration,
+      waveformData: track.waveformData,
+      color: trackColors[tracks.length % trackColors.length],
+      volume: track.volume,
+      muted: false,
+      soloed: false,
+      leftChannel: track.leftChannel,
+      rightChannel: track.rightChannel
+    };
+
+    setTracks(prev => [...prev, newTrack]);
+
+    // Duplicate all clips from the original track
+    const trackClips = clips.filter(clip => clip.trackId === trackId);
+    const newClips = trackClips.map(clip => ({
+      ...clip,
+      id: Date.now() + Math.random().toString(),
+      trackId: newTrack.id,
+      name: `${clip.name} (Copy)`,
+      originalTrackId: newTrack.id
+    }));
+
+    setClips(prev => [...prev, ...newClips]);
+  };
+
+  const handleClipDragStart = (event: React.MouseEvent, clip: AudioClip) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setDragClip({
+      clip,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top
+    });
+  };
+
+  const handleClipDrop = (event: React.MouseEvent, targetTrackId: string) => {
+    if (!dragClip) return;
+
+    const canvas = event.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const percent = x / rect.width;
+    const newStartTime = percent * totalDuration;
+
+    const newClip: AudioClip = {
+      id: Date.now().toString(),
+      trackId: targetTrackId,
+      startTime: newStartTime,
+      endTime: newStartTime + (dragClip.clip.endTime - dragClip.clip.startTime),
+      name: dragClip.clip.name,
+      volume: dragClip.clip.volume,
+      fadeIn: dragClip.clip.fadeIn,
+      fadeOut: dragClip.clip.fadeOut,
+      originalTrackId: dragClip.clip.originalTrackId
+    };
+
+    setClips(prev => [...prev, newClip]);
+    setDragClip(null);
   };
 
   const handleQuickMaster = async () => {
@@ -507,7 +1035,7 @@ export function AudioEditor() {
     }
 
     tracks.forEach((track, trackIndex) => {
-      const trackHeight = 100;
+      const trackHeight = 120;
       const trackY = trackIndex * trackHeight;
       
       ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
@@ -517,18 +1045,26 @@ export function AudioEditor() {
       ctx.lineWidth = 1;
       ctx.strokeRect(0, trackY, canvas.width, trackHeight);
       
+      // Track name and controls area (left side)
       ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
       ctx.font = 'bold 12px system-ui';
       ctx.fillText(track.name, 10, trackY + 20);
 
+      // Track status indicators
+      ctx.fillStyle = track.muted ? 'rgba(255, 0, 0, 0.8)' : 'rgba(0, 255, 0, 0.8)';
+      ctx.fillText(track.muted ? 'M' : '●', canvas.width - 80, trackY + 20);
+      
+      ctx.fillStyle = track.soloed ? 'rgba(255, 255, 0, 0.8)' : 'rgba(255, 255, 255, 0.4)';
+      ctx.fillText(track.soloed ? 'S' : '○', canvas.width - 60, trackY + 20);
+
       ctx.fillStyle = track.leftChannel ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)';
-      ctx.fillText('L', canvas.width - 60, trackY + 20);
+      ctx.fillText('L', canvas.width - 40, trackY + 20);
       ctx.fillStyle = track.rightChannel ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)';
-      ctx.fillText('R', canvas.width - 40, trackY + 20);
+      ctx.fillText('R', canvas.width - 20, trackY + 20);
 
       if (track.waveformData && track.waveformData.length > 0) {
         const waveformHeight = 60;
-        const waveformY = trackY + 30;
+        const waveformY = trackY + 40;
         const step = canvas.width / track.waveformData.length;
         
         ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
@@ -558,25 +1094,42 @@ export function AudioEditor() {
         
         const isSelected = selectedClip === clip.id;
         ctx.fillStyle = isSelected 
-          ? 'rgba(255, 255, 255, 0.2)' 
+          ? 'rgba(0, 123, 255, 0.3)' 
           : 'rgba(255, 255, 255, 0.1)';
-        ctx.fillRect(clipX, trackY + 30, clipWidth, 60);
+        ctx.fillRect(clipX, trackY + 40, clipWidth, 60);
         
-        ctx.strokeStyle = isSelected ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.4)';
-        ctx.lineWidth = isSelected ? 2 : 1;
-        ctx.strokeRect(clipX, trackY + 30, clipWidth, 60);
+        ctx.strokeStyle = isSelected ? 'rgba(0, 123, 255, 0.8)' : 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = isSelected ? 3 : 1;
+        ctx.strokeRect(clipX, trackY + 40, clipWidth, 60);
+        
+        // Add selection indicator and resize handles
+        if (isSelected) {
+          ctx.fillStyle = 'rgba(0, 123, 255, 0.8)';
+          ctx.fillRect(clipX, trackY + 40, 3, 60);
+          
+          // Resize handles
+          const handleWidth = 8;
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fillRect(clipX, trackY + 40, handleWidth, 60);
+          ctx.fillRect(clipX + clipWidth - handleWidth, trackY + 40, handleWidth, 60);
+          
+          // Handle indicators
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.fillRect(clipX + 2, trackY + 45, 4, 50);
+          ctx.fillRect(clipX + clipWidth - 6, trackY + 45, 4, 50);
+        }
         
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
         ctx.font = '10px system-ui';
-        ctx.fillText(clip.name, clipX + 5, trackY + 50);
+        ctx.fillText(clip.name, clipX + 5, trackY + 60);
         
         if (clip.fadeIn > 0) {
           ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-          ctx.fillRect(clipX, trackY + 30, 10, 60);
+          ctx.fillRect(clipX, trackY + 40, 10, 60);
         }
         if (clip.fadeOut > 0) {
           ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-          ctx.fillRect(clipX + clipWidth - 10, trackY + 30, 10, 60);
+          ctx.fillRect(clipX + clipWidth - 10, trackY + 40, 10, 60);
         }
       });
     });
@@ -608,11 +1161,29 @@ export function AudioEditor() {
       ctx.arc(playheadX, 15, 6, 0, 2 * Math.PI);
       ctx.fill();
     }
+
+    // Selection mode indicator
+    if (selectionMode) {
+      ctx.fillStyle = 'rgba(0, 123, 255, 0.3)';
+      ctx.fillRect(0, 0, canvas.width, 30);
+      ctx.fillStyle = 'rgba(0, 123, 255, 0.8)';
+      ctx.font = 'bold 12px system-ui';
+      ctx.fillText('SELECTION MODE ACTIVE', 10, 20);
+    }
+    
+    // Drag indicator
+    if (isDraggingClip && dragClip) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(0, 123, 255, 0.8)';
+      ctx.font = 'bold 14px system-ui';
+      ctx.fillText('DRAGGING CLIP - Drop to move or resize', 10, 25);
+    }
   };
 
   useEffect(() => {
     drawWaveform();
-  }, [currentTime, tracks, clips, selectedClip, zoom, totalDuration, selectionStart, selectionEnd]);
+  }, [currentTime, tracks, clips, selectedClip, zoom, totalDuration, selectionStart, selectionEnd, selectionMode, isDraggingClip, dragClip, resizeClip]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -627,144 +1198,338 @@ export function AudioEditor() {
         </div>
       </div>
 
-      {/* Main Control Bar */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+      {/* Futuristic Main Control Bar */}
+      <div className="bg-gradient-to-r from-gray-900/80 via-gray-800/80 to-gray-900/80 backdrop-blur-2xl border-b border-gray-600/30 px-6 py-4 shadow-2xl relative z-20">
         <div className="flex items-center justify-between">
-          {/* Time Displays */}
+          {/* Time Displays - Futuristic */}
           <div className="flex items-center space-x-4">
-            <div className="bg-black px-3 py-1 rounded">
-              <span className="font-mono text-sm">{formatTime(currentTime)}</span>
+            <div className="bg-gray-800/50 backdrop-blur-xl px-4 py-2 rounded-xl border border-gray-600/30">
+              <span className="font-mono text-sm text-gray-200">{formatTime(currentTime)}</span>
             </div>
-            <div className="bg-black px-3 py-1 rounded">
-              <span className="font-mono text-sm">{formatTime(totalDuration)}</span>
+            <div className="bg-gray-800/50 backdrop-blur-xl px-4 py-2 rounded-xl border border-gray-600/30">
+              <span className="font-mono text-sm text-gray-200">{formatTime(totalDuration)}</span>
             </div>
           </div>
 
-          {/* Transport Controls */}
-          <div className="flex items-center space-x-2">
-            <Button 
-              onClick={handleStop}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-            >
-              ⏹
-            </Button>
-            <Button 
-              onClick={handlePlay} 
-              disabled={isPlaying || tracks.length === 0}
-              className="bg-blue-600 hover:bg-blue-500 p-2 rounded disabled:opacity-50"
-            >
-              ▶
-            </Button>
-            <Button 
-              onClick={handlePause} 
-              disabled={!isPlaying}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded disabled:opacity-50"
-            >
-              ⏸
-            </Button>
-            <Button 
-              onClick={handleLoop}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-            >
-              🔄
-            </Button>
-            <Button 
-              onClick={handleSkipBackward}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-            >
-              ⏪⏪
-            </Button>
-            <Button 
-              onClick={handleSkipForward}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-            >
-              ⏩⏩
-            </Button>
-            <Button 
+          {/* Transport Controls - Futuristic Design */}
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center bg-gray-800/50 backdrop-blur-xl rounded-2xl p-2 border border-gray-600/30 shadow-lg">
+              <button 
+                onClick={handleStop}
+                className="w-10 h-10 bg-gradient-to-br from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 rounded-xl border border-gray-600/30 flex items-center justify-center text-gray-300 hover:text-white transition-all duration-200 shadow-inner"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <rect x="6" y="6" width="8" height="8"/>
+                </svg>
+              </button>
+              <button 
+                onClick={handlePlay} 
+                disabled={isPlaying || tracks.length === 0}
+                className="w-12 h-12 bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:from-gray-700 disabled:to-gray-800 rounded-xl border border-blue-500/30 flex items-center justify-center text-white disabled:text-gray-500 transition-all duration-200 shadow-lg mx-2"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M8 5v10l8-5-8-5z"/>
+                </svg>
+              </button>
+              <button 
+                onClick={handlePause} 
+                disabled={!isPlaying}
+                className="w-10 h-10 bg-gradient-to-br from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 disabled:from-gray-700 disabled:to-gray-800 rounded-xl border border-gray-600/30 flex items-center justify-center text-gray-300 hover:text-white disabled:text-gray-500 transition-all duration-200 shadow-inner"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M6 4h2v12H6V4zm6 0h2v12h-2V4z"/>
+                </svg>
+              </button>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <button 
+                onClick={handleSkipBackward}
+                className="w-8 h-8 bg-gradient-to-br from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 rounded-lg border border-gray-600/30 flex items-center justify-center text-gray-300 hover:text-white transition-all duration-200"
+              >
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11V16a1 1 0 001.555.832L18 13V16a1 1 0 102-1.664L12 14v-3l4 2.664V7l-4 2.664V8l-4-2.664V4l4 2.664V3a1 1 0 00-1.555-.832L4.555 5.168z"/>
+                </svg>
+              </button>
+              <button 
+                onClick={handleSkipForward}
+                className="w-8 h-8 bg-gradient-to-br from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 rounded-lg border border-gray-600/30 flex items-center justify-center text-gray-300 hover:text-white transition-all duration-200"
+              >
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M15.445 5.168A1 1 0 0017 6v8a1 1 0 01-1.555.832L10 11V16a1 1 0 01-1.555.832L2 13V16a1 1 0 11-2-1.664L8 14v-3L4 13.664V7l4 2.664V8l4-2.664V4l-4 2.664V3a1 1 0 011.555-.832L15.445 5.168z"/>
+                </svg>
+              </button>
+            </div>
+            
+            <button 
               onClick={handleRecord}
-              className="bg-red-600 hover:bg-red-500 p-2 rounded"
+              className="w-10 h-10 bg-gradient-to-br from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 rounded-xl border border-red-500/30 flex items-center justify-center text-white transition-all duration-200 shadow-lg"
             >
-              🔴
-            </Button>
-          </div>
-
-          {/* File Management */}
-          <div className="flex items-center space-x-2">
-            <Button 
-              onClick={handleNewFile}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-              title="New File"
-            >
-              📄
-            </Button>
+              <div className="w-4 h-4 bg-white rounded-full"></div>
+            </button>
+            
+            {/* Direct Upload Button */}
             <div className="relative">
               <Input
                 type="file"
                 accept="audio/*"
                 onChange={handleFileUpload}
                 className="hidden"
-                id="file-upload"
+                id="direct-file-upload"
               />
-              <Button 
-                onClick={() => document.getElementById('file-upload')?.click()}
-                className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-                title="Open File"
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  document.getElementById('direct-file-upload')?.click();
+                }}
+                className="w-10 h-10 bg-gradient-to-br from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 rounded-xl border border-green-500/30 flex items-center justify-center text-white transition-all duration-200 shadow-lg"
+                title="Upload Audio File"
               >
-                📂
-              </Button>
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                </svg>
+              </button>
             </div>
-            <Button 
-              onClick={handleQuickMaster}
-              disabled={tracks.length === 0 || isMastering}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded disabled:opacity-50"
-              title="Save/Export"
-            >
-              💾
-            </Button>
-            <Button 
-              onClick={handleClear}
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-              title="Clear"
-            >
-              ❌
-            </Button>
-            <Button 
-              className="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-              title="Selection"
-            >
-              S
-            </Button>
           </div>
 
-          {/* Selection Info */}
+          {/* Menu Bar - File, Edit, Effects */}
+          <div className="flex items-center space-x-6">
+            {/* File Menu */}
+            <div className="relative dropdown-trigger">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveDropdown(activeDropdown === 'file' ? null : 'file');
+                }}
+                className="px-4 py-2 bg-gradient-to-br from-gray-800/50 to-gray-700/50 hover:from-gray-700/50 hover:to-gray-600/50 rounded-xl border border-gray-600/30 text-gray-300 hover:text-white transition-all duration-200 backdrop-blur-xl"
+              >
+                File
+              </button>
+              {activeDropdown === 'file' && (
+                <div className="fixed top-0 left-0 mt-2 w-48 bg-gray-800/90 backdrop-blur-xl rounded-xl border border-gray-600/30 shadow-2xl z-[99999] dropdown-menu" style={{ top: '120px', left: '50%', transform: 'translateX(-50%)' }}>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleNewFile();
+                      setActiveDropdown(null);
+                    }}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 transition-colors duration-200 rounded-t-xl"
+                  >
+                    New Project
+                  </button>
+                  <div className="relative">
+                    <Input
+                      type="file"
+                      accept="audio/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      id="file-upload"
+                    />
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        document.getElementById('file-upload')?.click();
+                        setActiveDropdown(null);
+                      }}
+                      className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 transition-colors duration-200"
+                    >
+                      Open File
+                    </button>
+                  </div>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleQuickMaster();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={tracks.length === 0 || isMastering}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Export Master
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleClear();
+                      setActiveDropdown(null);
+                    }}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 transition-colors duration-200 rounded-b-xl"
+                  >
+                    Clear All
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Edit Menu */}
+            <div className="relative dropdown-trigger">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveDropdown(activeDropdown === 'edit' ? null : 'edit');
+                }}
+                className="px-4 py-2 bg-gradient-to-br from-gray-800/50 to-gray-700/50 hover:from-gray-700/50 hover:to-gray-600/50 rounded-xl border border-gray-600/30 text-gray-300 hover:text-white transition-all duration-200 backdrop-blur-xl"
+              >
+                Edit
+              </button>
+              {activeDropdown === 'edit' && (
+                <div className="fixed top-0 left-0 mt-2 w-48 bg-gray-800/90 backdrop-blur-xl rounded-xl border border-gray-600/30 shadow-2xl z-[99999] dropdown-menu" style={{ top: '120px', left: '50%', transform: 'translateX(-50%)' }}>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSplit();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={tracks.length === 0}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200 rounded-t-xl"
+                  >
+                    Split at Playhead
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCut();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip || !selectionStart || !selectionEnd}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Cut Selection
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCopy();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Copy
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePaste();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!copiedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Paste
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDuplicate();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Duplicate
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Effects Menu */}
+            <div className="relative dropdown-trigger">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveDropdown(activeDropdown === 'effects' ? null : 'effects');
+                }}
+                className="px-4 py-2 bg-gradient-to-br from-gray-800/50 to-gray-700/50 hover:from-gray-700/50 hover:to-gray-600/50 rounded-xl border border-gray-600/30 text-gray-300 hover:text-white transition-all duration-200 backdrop-blur-xl"
+              >
+                Effects
+              </button>
+              {activeDropdown === 'effects' && (
+                <div className="fixed top-0 left-0 mt-2 w-48 bg-gray-800/90 backdrop-blur-xl rounded-xl border border-gray-600/30 shadow-2xl z-[99999] dropdown-menu" style={{ top: '120px', left: '50%', transform: 'translateX(-50%)' }}>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFadeIn();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200 rounded-t-xl"
+                  >
+                    Fade In
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFadeOut();
+                      setActiveDropdown(null);
+                    }}
+                    disabled={!selectedClip}
+                    className="w-full px-4 py-3 text-left text-gray-300 hover:text-white hover:bg-gray-700/50 disabled:text-gray-500 disabled:hover:bg-transparent transition-colors duration-200"
+                  >
+                    Fade Out
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectionMode(!selectionMode);
+                      setActiveDropdown(null);
+                    }}
+                    className={`w-full px-4 py-3 text-left transition-colors duration-200 rounded-b-xl ${
+                      selectionMode 
+                        ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-900/30' 
+                        : 'text-gray-300 hover:text-white hover:bg-gray-700/50'
+                    }`}
+                  >
+                    Selection Mode
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Selection Info - Futuristic Display */}
           <div className="flex items-center space-x-4 text-sm">
-            <span>Selection:</span>
-            <div className="flex items-center space-x-2">
-              <span>Start:</span>
-              <span className="bg-black px-2 py-1 rounded">
-                {selectionStart !== null ? formatTime(selectionStart) : '-'}
-              </span>
+            <div className="bg-gray-800/50 backdrop-blur-xl rounded-xl border border-gray-600/30 px-4 py-2">
+              <div className="flex items-center space-x-6">
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-400">Start:</span>
+                  <span className="bg-gray-700/50 px-2 py-1 rounded-lg text-gray-200 font-mono">
+                    {selectionStart !== null ? formatTime(selectionStart) : '--:--'}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-400">End:</span>
+                  <span className="bg-gray-700/50 px-2 py-1 rounded-lg text-gray-200 font-mono">
+                    {selectionEnd !== null ? formatTime(selectionEnd) : '--:--'}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-400">Duration:</span>
+                  <span className="bg-gray-700/50 px-2 py-1 rounded-lg text-gray-200 font-mono">
+                    {selectionStart !== null && selectionEnd !== null 
+                      ? formatTime(Math.abs(selectionEnd - selectionStart)) 
+                      : '--:--'}
+                  </span>
+                </div>
+                <button 
+                  onClick={clearSelection}
+                  className="px-3 py-1 bg-gradient-to-br from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 rounded-lg border border-gray-600/30 text-gray-300 hover:text-white transition-all duration-200 text-xs"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
-            <div className="flex items-center space-x-2">
-              <span>End:</span>
-              <span className="bg-black px-2 py-1 rounded">
-                {selectionEnd !== null ? formatTime(selectionEnd) : '-'}
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span>Duration:</span>
-              <span className="bg-black px-2 py-1 rounded">
-                {selectionStart !== null && selectionEnd !== null 
-                  ? formatTime(Math.abs(selectionEnd - selectionStart)) 
-                  : '-'}
-              </span>
-            </div>
-            <Button 
-              onClick={clearSelection}
-              className="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-xs"
-            >
-              clear selection
-            </Button>
           </div>
         </div>
       </div>
@@ -777,20 +1542,62 @@ export function AudioEditor() {
       )}
 
       {/* Waveform Editor */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative z-10">
         <canvas
           ref={canvasRef}
           width={1200}
-          height={tracks.length * 100 + 100}
-          className="w-full cursor-pointer"
+          height={tracks.length * 120 + 100}
+          className="w-full cursor-pointer relative z-5"
           onClick={handleCanvasClick}
           onMouseDown={handleCanvasMouseDown}
           onMouseUp={handleCanvasMouseUp}
           onMouseMove={handleCanvasMouseMove}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragClip) {
+              const targetTrackId = tracks[Math.floor(e.clientY / 120)]?.id;
+              if (targetTrackId) {
+                handleClipDrop(e as any, targetTrackId);
+              }
+            }
+          }}
+          onDragOver={(e) => e.preventDefault()}
         />
         
-        {/* Channel Controls */}
+        {/* Track Controls - Left Side */}
         <div className="absolute left-2 top-2 space-y-2">
+          {tracks.map((track, index) => (
+            <div key={track.id} className="flex flex-col space-y-1" style={{ marginTop: index * 120 }}>
+              <div className="text-xs font-bold text-white">{track.name}</div>
+              <div className="flex space-x-1">
+                <button 
+                  onClick={() => handleTrackMute(track.id)}
+                  className={`w-6 h-6 text-xs rounded border ${track.muted ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
+                  title={track.muted ? 'Unmute' : 'Mute'}
+                >
+                  M
+                </button>
+                <button 
+                  onClick={() => handleTrackSolo(track.id)}
+                  className={`w-6 h-6 text-xs rounded border ${track.soloed ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
+                  title={track.soloed ? 'Unsolo' : 'Solo'}
+                >
+                  S
+                </button>
+                <button 
+                  onClick={() => handleTrackDuplicate(track.id)}
+                  className="w-6 h-6 text-xs rounded border bg-gray-700 hover:bg-gray-600 text-white"
+                  title="Duplicate Track"
+                >
+                  D
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Channel Controls */}
+        <div className="absolute right-2 top-2 space-y-2">
           <div className="text-xs font-bold">L ON</div>
           <div className="text-xs font-bold">R ON</div>
           <div className="space-y-1">
@@ -808,8 +1615,11 @@ export function AudioEditor() {
                 Drag n drop an Audio File in this window, or click
               </p>
               <Button 
-                onClick={() => document.getElementById('file-upload')?.click()}
-                className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded border border-gray-600"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  document.getElementById('file-upload')?.click();
+                }}
+                className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 px-6 py-3 rounded-xl border border-purple-500/30 text-white font-medium transition-all duration-200 shadow-lg"
               >
                 here to use a sample
               </Button>
