@@ -60,7 +60,7 @@ export function AudioEditor() {
   const [startTime, setStartTime] = useState(0);
   const [lastClickTime, setLastClickTime] = useState(0); // For double-click detection
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null); // For dropdown menus
-  const [audioBufferMap, setAudioBufferMap] = useState<Map<string, { buffer: AudioBuffer; originalTrackId: string; startSample: number; endSample: number }>>(new Map()); // Track audio buffer relationships
+  const [audioBufferMap, setAudioBufferMap] = useState<Map<string, { buffer: AudioBuffer; originalTrackId: string; startSample: number; endSample: number; originalDuration: number }>>(new Map()); // Track audio buffer relationships
 
   const trackColors = [
     'rgba(99, 102, 241, 0.8)',   // Indigo
@@ -73,7 +73,11 @@ export function AudioEditor() {
     'rgba(251, 146, 60, 0.8)',   // Orange
   ];
 
-  const totalDuration = Math.max(...tracks.map(track => track.duration), 0);
+  const totalDuration = Math.max(
+    ...tracks.map(track => track.duration),
+    ...clips.map(clip => clip.endTime),
+    0
+  );
 
   // Initialize audio context
   useEffect(() => {
@@ -121,18 +125,13 @@ export function AudioEditor() {
         const bufferInfo = audioBufferMap.get(track.id);
         
         if (bufferInfo) {
-          // Calculate the actual time position in the original audio
-          const originalStartTime = bufferInfo.startSample / bufferInfo.buffer.sampleRate;
-          const clipStartInOriginal = originalStartTime + clip.startTime;
-          const currentTimeInOriginal = clipStartInOriginal + (currentTime - clip.startTime);
-          
           // Calculate buffer start time relative to this clip's buffer
           const bufferStartTime = Math.max(0, currentTime - clip.startTime);
           const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
           const duration = bufferEndTime - bufferStartTime;
           
-          // Only play if we have valid duration
-          if (duration > 0) {
+          // Only play if we have valid duration and the clip is actually playing
+          if (duration > 0 && currentTime >= clip.startTime && currentTime < clip.endTime) {
             source.start(0, bufferStartTime, duration);
             audioSourcesRef.current.set(clip.id, source);
             gainNodesRef.current.set(clip.id, gainNode);
@@ -143,8 +142,8 @@ export function AudioEditor() {
           const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
           const duration = bufferEndTime - bufferStartTime;
           
-          // Only play if we have valid duration
-          if (duration > 0) {
+          // Only play if we have valid duration and the clip is actually playing
+          if (duration > 0 && currentTime >= clip.startTime && currentTime < clip.endTime) {
             source.start(0, bufferStartTime, duration);
             audioSourcesRef.current.set(clip.id, source);
             gainNodesRef.current.set(clip.id, gainNode);
@@ -276,7 +275,8 @@ export function AudioEditor() {
           buffer: audioBuffer,
           originalTrackId: trackId,
           startSample: 0,
-          endSample: audioBuffer.length
+          endSample: audioBuffer.length,
+          originalDuration: audioBuffer.duration
         });
         return newMap;
       });
@@ -693,13 +693,15 @@ export function AudioEditor() {
             buffer: firstPartBuffer,
             originalTrackId: originalBufferInfo.originalTrackId,
             startSample: originalBufferInfo.startSample,
-            endSample: originalStartSample
+            endSample: originalStartSample,
+            originalDuration: originalBufferInfo.originalDuration
           });
           newMap.set(secondTrackId, {
             buffer: secondPartBuffer,
             originalTrackId: originalBufferInfo.originalTrackId,
             startSample: originalStartSample,
-            endSample: originalBufferInfo.endSample
+            endSample: originalBufferInfo.endSample,
+            originalDuration: originalBufferInfo.originalDuration
           });
           return newMap;
         });
