@@ -101,53 +101,60 @@ export function AudioEditor() {
     audioSourcesRef.current.clear();
     gainNodesRef.current.clear();
     
-    // Create new sources for each clip
-    clips.forEach(clip => {
+    // Find clips that should be playing at current time
+    const activeClips = clips.filter(clip => {
+      return currentTime >= clip.startTime && currentTime < clip.endTime;
+    });
+    
+    // Debug: Log active clips for troubleshooting
+    if (activeClips.length > 0) {
+      console.log('Active clips at time', currentTime.toFixed(2), ':', activeClips.map(c => `${c.name} (${c.startTime.toFixed(2)}-${c.endTime.toFixed(2)})`));
+    }
+    
+    // Create new sources for each active clip
+    activeClips.forEach(clip => {
       const track = tracks.find(t => t.id === clip.trackId);
       if (!track || track.muted) return;
       
       const audioBuffer = audioBuffersRef.current.get(track.id);
       if (!audioBuffer) return;
       
-      // Only play if clip is in current time range
-      if (currentTime < clip.endTime && currentTime + 10 > clip.startTime) {
-        const source = audioContextRef.current!.createBufferSource();
-        const gainNode = audioContextRef.current!.createGain();
+      const source = audioContextRef.current!.createBufferSource();
+      const gainNode = audioContextRef.current!.createGain();
+      
+      source.buffer = audioBuffer;
+      source.connect(gainNode);
+      gainNode.connect(audioContextRef.current!.destination);
+      
+      // Set volume
+      gainNode.gain.value = track.volume * clip.volume;
+      
+      // Get buffer info to understand the relationship to original audio
+      const bufferInfo = audioBufferMap.get(track.id);
+      
+      if (bufferInfo) {
+        // Calculate buffer start time relative to this clip's buffer
+        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+        const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
+        const duration = bufferEndTime - bufferStartTime;
         
-        source.buffer = audioBuffer;
-        source.connect(gainNode);
-        gainNode.connect(audioContextRef.current!.destination);
+        // Only play if we have valid duration
+        if (duration > 0) {
+          source.start(0, bufferStartTime, duration);
+          audioSourcesRef.current.set(clip.id, source);
+          gainNodesRef.current.set(clip.id, gainNode);
+        }
+      } else {
+        // Fallback for clips without buffer info (original clips)
+        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+        const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
+        const duration = bufferEndTime - bufferStartTime;
         
-        // Set volume
-        gainNode.gain.value = track.volume * clip.volume;
-        
-        // Get buffer info to understand the relationship to original audio
-        const bufferInfo = audioBufferMap.get(track.id);
-        
-        if (bufferInfo) {
-          // Calculate buffer start time relative to this clip's buffer
-          const bufferStartTime = Math.max(0, currentTime - clip.startTime);
-          const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
-          const duration = bufferEndTime - bufferStartTime;
-          
-          // Only play if we have valid duration and the clip is actually playing
-          if (duration > 0 && currentTime >= clip.startTime && currentTime < clip.endTime) {
-            source.start(0, bufferStartTime, duration);
-            audioSourcesRef.current.set(clip.id, source);
-            gainNodesRef.current.set(clip.id, gainNode);
-          }
-        } else {
-          // Fallback for clips without buffer info (original clips)
-          const bufferStartTime = Math.max(0, currentTime - clip.startTime);
-          const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
-          const duration = bufferEndTime - bufferStartTime;
-          
-          // Only play if we have valid duration and the clip is actually playing
-          if (duration > 0 && currentTime >= clip.startTime && currentTime < clip.endTime) {
-            source.start(0, bufferStartTime, duration);
-            audioSourcesRef.current.set(clip.id, source);
-            gainNodesRef.current.set(clip.id, gainNode);
-          }
+        // Only play if we have valid duration
+        if (duration > 0) {
+          source.start(0, bufferStartTime, duration);
+          audioSourcesRef.current.set(clip.id, source);
+          gainNodesRef.current.set(clip.id, gainNode);
         }
       }
     });
@@ -194,7 +201,7 @@ export function AudioEditor() {
       }
       
       setCurrentTime(newTime);
-    }, 50); // More frequent updates for smoother playback
+    }, 25); // Even more frequent updates for better clip detection
     
     return () => clearInterval(interval);
   }, [isPlaying, totalDuration, currentTime]);
