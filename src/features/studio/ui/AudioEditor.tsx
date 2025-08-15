@@ -82,13 +82,35 @@ export function AudioEditor() {
   // Initialize audio context
   useEffect(() => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 44100, // Ensure high quality sample rate
+        latencyHint: 'interactive' // Optimize for real-time playback
+      });
     }
   }, []);
 
   // Audio playback management
   const playAudio = () => {
     if (!audioContextRef.current || !isPlaying) return;
+    
+    // Find clips that should be playing at current time
+    const activeClips = clips.filter(clip => {
+      return currentTime >= clip.startTime && currentTime < clip.endTime;
+    });
+    
+    // Get currently playing clips
+    const currentlyPlayingClips = Array.from(audioSourcesRef.current.keys());
+    
+    // Only restart audio if the active clips have changed
+    const activeClipIds = activeClips.map(clip => clip.id).sort();
+    const currentClipIds = currentlyPlayingClips.sort();
+    
+    const clipsChanged = activeClipIds.length !== currentClipIds.length || 
+                        !activeClipIds.every((id, index) => id === currentClipIds[index]);
+    
+    if (!clipsChanged) {
+      return; // No need to restart audio
+    }
     
     // Stop all current sources
     audioSourcesRef.current.forEach(source => {
@@ -100,11 +122,6 @@ export function AudioEditor() {
     });
     audioSourcesRef.current.clear();
     gainNodesRef.current.clear();
-    
-    // Find clips that should be playing at current time
-    const activeClips = clips.filter(clip => {
-      return currentTime >= clip.startTime && currentTime < clip.endTime;
-    });
     
     // Debug: Log active clips for troubleshooting
     if (activeClips.length > 0) {
@@ -184,7 +201,12 @@ export function AudioEditor() {
   // Update audio when current time changes (for split clip detection)
   useEffect(() => {
     if (isPlaying && audioContextRef.current) {
-      playAudio();
+      // Debounce audio updates to prevent excessive restarts
+      const timeoutId = setTimeout(() => {
+        playAudio();
+      }, 50); // Reduced frequency to prevent audio quality issues
+      
+      return () => clearTimeout(timeoutId);
     }
   }, [currentTime, isPlaying]);
   
@@ -287,7 +309,20 @@ export function AudioEditor() {
       if (!audioContextRef.current) {
         throw new Error('Audio context not initialized');
       }
-      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer, 
+        (decodedBuffer) => {
+          // Success callback - ensure high quality
+          console.log('Audio decoded successfully:', {
+            sampleRate: decodedBuffer.sampleRate,
+            duration: decodedBuffer.duration,
+            numberOfChannels: decodedBuffer.numberOfChannels
+          });
+        },
+        (error) => {
+          console.error('Audio decode error:', error);
+          throw new Error('Failed to decode audio file');
+        }
+      );
       const trackId = Date.now().toString();
       audioBuffersRef.current.set(trackId, audioBuffer);
       
