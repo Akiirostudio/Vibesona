@@ -110,8 +110,13 @@ export function AudioEditor() {
     
     const noAudioPlaying = currentlyPlayingClips.length === 0;
     
-    // Restart if clips changed OR if we should have audio but none is playing
-    if (!clipsChanged && !noAudioPlaying) {
+    // Always restart if we have active clips but no audio is playing
+    // OR if the active clips have changed
+    // OR if we're in a gap and should have audio but don't
+    const shouldHaveAudio = activeClips.length > 0;
+    const hasAudio = currentlyPlayingClips.length > 0;
+    
+    if (!clipsChanged && hasAudio && shouldHaveAudio) {
       return; // No need to restart audio
     }
     
@@ -121,8 +126,9 @@ export function AudioEditor() {
       activeClips: activeClipIds,
       currentClips: currentClipIds,
       clipsChanged,
-      noAudioPlaying,
-      willRestart: clipsChanged || noAudioPlaying
+      shouldHaveAudio,
+      hasAudio,
+      willRestart: clipsChanged || !hasAudio || !shouldHaveAudio
     });
     
     // Stop all current sources
@@ -214,12 +220,8 @@ export function AudioEditor() {
   // Update audio when current time changes (for split clip detection)
   useEffect(() => {
     if (isPlaying && audioContextRef.current) {
-      // Debounce audio updates to prevent excessive restarts
-      const timeoutId = setTimeout(() => {
-        playAudio();
-      }, 25); // Faster response for better clip detection
-      
-      return () => clearTimeout(timeoutId);
+      // Immediate audio update for better clip detection
+      playAudio();
     }
   }, [currentTime, isPlaying]);
   
