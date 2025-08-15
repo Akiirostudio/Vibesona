@@ -109,6 +109,8 @@ export function AudioEditor() {
     // Debug: Log active clips for troubleshooting
     if (activeClips.length > 0) {
       console.log('Active clips at time', currentTime.toFixed(2), ':', activeClips.map(c => `${c.name} (${c.startTime.toFixed(2)}-${c.endTime.toFixed(2)})`));
+    } else {
+      console.log('No active clips at time', currentTime.toFixed(2), 'Available clips:', clips.map(c => `${c.name} (${c.startTime.toFixed(2)}-${c.endTime.toFixed(2)})`));
     }
     
     // Create new sources for each active clip
@@ -135,10 +137,14 @@ export function AudioEditor() {
       const bufferInfo = audioBufferMap.get(bufferId);
       
       if (bufferInfo) {
-        // Calculate buffer start time relative to this clip's buffer
-        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+        // For split clips, calculate the correct buffer position
+        const timeInClip = currentTime - clip.startTime;
+        const bufferStartTime = Math.max(0, timeInClip);
         const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
         const duration = bufferEndTime - bufferStartTime;
+        
+        // Debug: Log buffer info for split clips
+        console.log(`Playing split clip: ${clip.name}, timeInClip: ${timeInClip.toFixed(2)}, bufferStart: ${bufferStartTime.toFixed(2)}, duration: ${duration.toFixed(2)}`);
         
         // Only play if we have valid duration
         if (duration > 0) {
@@ -148,7 +154,8 @@ export function AudioEditor() {
         }
       } else {
         // Fallback for clips without buffer info (original clips)
-        const bufferStartTime = Math.max(0, currentTime - clip.startTime);
+        const timeInClip = currentTime - clip.startTime;
+        const bufferStartTime = Math.max(0, timeInClip);
         const bufferEndTime = Math.min(audioBuffer.duration, clip.endTime - clip.startTime);
         const duration = bufferEndTime - bufferStartTime;
         
@@ -173,6 +180,13 @@ export function AudioEditor() {
       return () => clearTimeout(timeoutId);
     }
   }, [clips, tracks, isPlaying]);
+  
+  // Update audio when current time changes (for split clip detection)
+  useEffect(() => {
+    if (isPlaying && audioContextRef.current) {
+      playAudio();
+    }
+  }, [currentTime, isPlaying]);
   
   // Separate effect for current time updates to avoid audio restarts
   useEffect(() => {
@@ -203,7 +217,7 @@ export function AudioEditor() {
       }
       
       setCurrentTime(newTime);
-    }, 25); // Even more frequent updates for better clip detection
+    }, 16); // 60fps updates for precise clip detection
     
     return () => clearInterval(interval);
   }, [isPlaying, totalDuration, currentTime]);
