@@ -101,16 +101,29 @@ export function AudioEditor() {
     // Get currently playing clips
     const currentlyPlayingClips = Array.from(audioSourcesRef.current.keys());
     
-    // Only restart audio if the active clips have changed
+    // Check if we need to restart audio (clips changed OR no audio currently playing)
     const activeClipIds = activeClips.map(clip => clip.id).sort();
     const currentClipIds = currentlyPlayingClips.sort();
     
     const clipsChanged = activeClipIds.length !== currentClipIds.length || 
                         !activeClipIds.every((id, index) => id === currentClipIds[index]);
     
-    if (!clipsChanged) {
+    const noAudioPlaying = currentlyPlayingClips.length === 0;
+    
+    // Restart if clips changed OR if we should have audio but none is playing
+    if (!clipsChanged && !noAudioPlaying) {
       return; // No need to restart audio
     }
+    
+    // Debug: Log restart decision
+    console.log('Audio restart decision:', {
+      currentTime: currentTime.toFixed(2),
+      activeClips: activeClipIds,
+      currentClips: currentClipIds,
+      clipsChanged,
+      noAudioPlaying,
+      willRestart: clipsChanged || noAudioPlaying
+    });
     
     // Stop all current sources
     audioSourcesRef.current.forEach(source => {
@@ -204,7 +217,7 @@ export function AudioEditor() {
       // Debounce audio updates to prevent excessive restarts
       const timeoutId = setTimeout(() => {
         playAudio();
-      }, 50); // Reduced frequency to prevent audio quality issues
+      }, 25); // Faster response for better clip detection
       
       return () => clearTimeout(timeoutId);
     }
