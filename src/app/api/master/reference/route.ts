@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     await execAsync(masterCmd);
 
     // Read the mastered file
-    const masteredBuffer = await readFile(outputPath);
+    const masteredBuffer = await readFile(outputPath) as Buffer;
 
     // Clean up temporary files
     await Promise.all([
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     ]);
 
     // Return the mastered audio
-    return new NextResponse(masteredBuffer, {
+    return new NextResponse(new Uint8Array(masteredBuffer), {
       headers: {
         'Content-Type': 'audio/wav',
         'Content-Disposition': 'attachment; filename="reference_mastered_audio.wav"'
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function readFile(path: string, encoding?: string): Promise<string | Buffer> {
+async function readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer> {
   const { readFile } = await import('fs/promises');
   return readFile(path, encoding);
 }
