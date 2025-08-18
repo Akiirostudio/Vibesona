@@ -44,15 +44,14 @@ export function NavBar() {
             <span>Vibesona</span>
           </Link>
           
-          {currentUser && (
-            <div className="text-sm text-white/80 flex gap-4">
-              <Link href="/playlist" className="hover:text-white transition-colors">Analyzer</Link>
-              <Link href="/playlists" className="hover:text-white transition-colors">Playlists</Link>
-              <Link href="/studio" className="hover:text-white transition-colors">Studio</Link>
-              <Link href="/submissions" className="hover:text-white transition-colors">Submissions</Link>
-              <Link href="/tokens" className="hover:text-white transition-colors">Tokens</Link>
-            </div>
-          )}
+          {/* Navigation links - always visible */}
+          <div className="text-sm text-white/80 flex gap-4">
+            <Link href="/playlist" className="hover:text-white transition-colors">Analyzer</Link>
+            <Link href="/playlists" className="hover:text-white transition-colors">Playlists</Link>
+            <Link href="/studio" className="hover:text-white transition-colors">Studio</Link>
+            <Link href="/submissions" className="hover:text-white transition-colors">Submissions</Link>
+            <Link href="/tokens" className="hover:text-white transition-colors">Tokens</Link>
+          </div>
         </div>
 
         <div className="flex items-center gap-4">
