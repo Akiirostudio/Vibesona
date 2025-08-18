@@ -2,9 +2,18 @@
 
 import { useState } from "react";
 
+interface SongInfo {
+  name: string;
+  artists: Array<{ name: string }>;
+  album: {
+    name: string;
+    images: Array<{ url: string }>;
+  };
+}
+
 export default function Home() {
   const [songUrl, setSongUrl] = useState("");
-  const [songInfo, setSongInfo] = useState(null);
+  const [songInfo, setSongInfo] = useState<SongInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -33,8 +42,9 @@ export default function Home() {
       
       const data = await response.json();
       setSongInfo(data);
-    } catch (err) {
-      setError(err.message || "Failed to load track");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to load track";
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
