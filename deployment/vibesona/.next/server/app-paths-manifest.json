@@ -1,0 +1,23 @@
+{
+  "/api/health/route": "app/api/health/route.js",
+  "/api/master/reference/route": "app/api/master/reference/route.js",
+  "/api/master/quick/route": "app/api/master/quick/route.js",
+  "/api/playlists/route": "app/api/playlists/route.js",
+  "/api/spotify/playlists/route": "app/api/spotify/playlists/route.js",
+  "/api/playlist/analyze/route": "app/api/playlist/analyze/route.js",
+  "/api/spotify/track/[id]/route": "app/api/spotify/track/[id]/route.js",
+  "/api/submissions/route": "app/api/submissions/route.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/submissions/user/route": "app/api/submissions/user/route.js",
+  "/api/wallet/balance/route": "app/api/wallet/balance/route.js",
+  "/api/wallet/topup/route": "app/api/wallet/topup/route.js",
+  "/favicon.ico/route": "app/favicon.ico/route.js",
+  "/login/page": "app/login/page.js",
+  "/playlists/page": "app/playlists/page.js",
+  "/submissions/page": "app/submissions/page.js",
+  "/page": "app/page.js",
+  "/playlist/page": "app/playlist/page.js",
+  "/tokens/page": "app/tokens/page.js",
+  "/studio/page": "app/studio/page.js",
+  "/forgot-password/page": "app/forgot-password/page.js"
+}

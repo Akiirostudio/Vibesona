@@ -1,0 +1,23 @@
+{
+  "/api/health/route": "/api/health",
+  "/api/master/reference/route": "/api/master/reference",
+  "/api/master/quick/route": "/api/master/quick",
+  "/api/playlists/route": "/api/playlists",
+  "/api/spotify/playlists/route": "/api/spotify/playlists",
+  "/api/playlist/analyze/route": "/api/playlist/analyze",
+  "/api/spotify/track/[id]/route": "/api/spotify/track/[id]",
+  "/api/submissions/route": "/api/submissions",
+  "/_not-found/page": "/_not-found",
+  "/api/submissions/user/route": "/api/submissions/user",
+  "/api/wallet/balance/route": "/api/wallet/balance",
+  "/api/wallet/topup/route": "/api/wallet/topup",
+  "/favicon.ico/route": "/favicon.ico",
+  "/login/page": "/login",
+  "/playlists/page": "/playlists",
+  "/submissions/page": "/submissions",
+  "/page": "/",
+  "/playlist/page": "/playlist",
+  "/tokens/page": "/tokens",
+  "/studio/page": "/studio",
+  "/forgot-password/page": "/forgot-password"
+}

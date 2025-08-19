@@ -1,0 +1,49 @@
+{
+  "name": "vibesona",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@auth/prisma-adapter": "^2.10.0",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@prisma/client": "^6.13.0",
+    "@stripe/stripe-js": "^7.8.0",
+    "axios": "^1.11.0",
+    "date-fns": "^4.1.0",
+    "firebase": "^12.1.0",
+    "lucide-react": "^0.539.0",
+    "next": "15.4.6",
+    "next-auth": "^4.24.11",
+    "prisma": "^6.13.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-hook-form": "^7.62.0",
+    "spotify-web-api-node": "^5.0.2",
+    "stripe": "^18.4.0",
+    "uuid": "^11.1.0",
+    "waveform-playlist": "^4.3.3",
+    "wavesurfer.js": "^7.10.1",
+    "zod": "^4.0.16",
+    "zustand": "^5.0.7"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "eslint": "^9",
+    "eslint-config-next": "15.4.6",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.3",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,17 @@
+Vibesona Hostinger Deployment Instructions
+==========================================
+
+1. Upload the 'vibesona' folder to your Hostinger hosting
+2. Rename .env.template to .env and fill in your credentials
+3. In Hostinger Node.js panel:
+   - Set startup file to: server.js
+   - Set Node.js version to 18.x or higher
+   - Run: npm install --production
+   - Run: npx prisma generate
+   - Run: npx prisma db push
+   - Run: npm run seed
+   - Start the application
+
+4. Your app will be available at your domain!
+
+For detailed instructions, see DEPLOYMENT.md
